@@ -57,7 +57,7 @@ export default function ShelfApp() {
       .then(async (resumed) => {
         if (resumed) {
           setSession(resumed);
-          await loadFromPDS(resumed.did);
+          await loadFromPDS(resumed);
         }
       })
       .catch(() => {
@@ -71,11 +71,11 @@ export default function ShelfApp() {
   }, []);
 
   // ─── Load collections from PDS ───────────────────────────────
-  async function loadFromPDS(did: string) {
+  async function loadFromPDS(s: ShelfSession) {
     setPdsLoading(true);
     setSyncError(null);
     try {
-      const cols = await fetchCollections(did);
+      const cols = await fetchCollections(s);
       setCollections(cols.length > 0 ? cols : []);
       setActiveColId(cols[0]?.id ?? "");
     } catch (err) {
@@ -92,7 +92,7 @@ export default function ShelfApp() {
   const handleSignIn = async (newSession: ShelfSession) => {
     setSession(newSession);
     setShowSignIn(false);
-    await loadFromPDS(newSession.did);
+    await loadFromPDS(newSession);
   };
 
   // ─── Sign out ────────────────────────────────────────────────
@@ -133,7 +133,7 @@ export default function ShelfApp() {
     // Write to PDS if live
     if (session && activeColId) {
       try {
-        const rkey = await putItem(session.did, activeColId, item);
+        const rkey = await putItem(session, activeColId, item);
         // Update the local id to match the PDS rkey
         setCollections((prev) =>
           prev.map((c) =>
@@ -165,7 +165,7 @@ export default function ShelfApp() {
 
     if (session) {
       try {
-        await deleteItemFromPDS(session.did, itemId);
+        await deleteItemFromPDS(session, itemId);
       } catch {
         setSyncError("Item removed locally but failed to delete from your PDS.");
       }
@@ -181,7 +181,7 @@ export default function ShelfApp() {
 
     if (session) {
       try {
-        const rkey = await putCollection(session.did, col);
+        const rkey = await putCollection(session, col);
         // Update local id to PDS rkey
         setCollections((prev) =>
           prev.map((c) =>
@@ -211,7 +211,7 @@ export default function ShelfApp() {
     if (session && col) {
       try {
         await deleteCollectionFromPDS(
-          session.did,
+          session,
           colId,
           col.items.map((i) => i.id)
         );

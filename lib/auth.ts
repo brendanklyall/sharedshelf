@@ -1,8 +1,8 @@
-// Auth helpers — bsky.social supports CORS (access-control-allow-origin: *),
-// so BskyAgent can be called directly from the browser without a proxy.
+// Auth helpers using raw fetch — bypasses @atproto/api bundling issues.
+// bsky.social supports CORS (access-control-allow-origin: *) so all calls
+// can be made directly from the browser.
 
-import { BskyAgent } from "@atproto/api";
-
+const PDS = "https://bsky.social/xrpc";
 const SESSION_KEY = "shared-shelf-session";
 
 export interface ShelfSession {
@@ -12,58 +12,86 @@ export interface ShelfSession {
   refreshJwt: string;
 }
 
-let _agent: BskyAgent | null = null;
+// ─── Raw XRPC helper ─────────────────────────────────────────
 
-export function getAgent(): BskyAgent {
-  if (!_agent) {
-    _agent = new BskyAgent({ service: "https://bsky.social" });
+async function xrpc(
+  endpoint: string,
+  options: {
+    method?: "GET" | "POST";
+    auth?: string;
+    body?: unknown;
+  } = {}
+): Promise<unknown> {
+  const { method = "POST", auth, body } = options;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (auth) headers["Authorization"] = `Bearer ${auth}`;
+
+  const res = await fetch(`${PDS}/${endpoint}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  const text = await res.text();
+
+  // Attempt JSON parse — surface a useful error if the body is empty/malformed
+  let data: Record<string, unknown> = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Unexpected response from Bluesky (status ${res.status}): ${text.slice(0, 120)}`
+      );
+    }
   }
-  return _agent;
+
+  if (!res.ok) {
+    const msg = String(data.message || data.error || `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+
+  return data;
 }
 
-// ─── Login — direct browser → bsky.social (CORS allowed) ─────
+// ─── Login ───────────────────────────────────────────────────
 
 export async function login(
   identifier: string,
   password: string
 ): Promise<ShelfSession> {
-  const agent = new BskyAgent({ service: "https://bsky.social" });
-
-  // agent.login() calls com.atproto.server.createSession
-  const result = await agent.login({ identifier, password });
-  _agent = agent;
+  const data = (await xrpc("com.atproto.server.createSession", {
+    body: { identifier, password },
+  })) as Record<string, unknown>;
 
   const session: ShelfSession = {
-    did: result.data.did,
-    handle: result.data.handle,
-    accessJwt: result.data.accessJwt,
-    refreshJwt: result.data.refreshJwt,
+    did: String(data.did),
+    handle: String(data.handle),
+    accessJwt: String(data.accessJwt),
+    refreshJwt: String(data.refreshJwt),
   };
   saveSession(session);
   return session;
 }
 
-// ─── Resume stored session ────────────────────────────────────
+// ─── Refresh stored session ───────────────────────────────────
 
 export async function resumeSession(
   session: ShelfSession
 ): Promise<ShelfSession | null> {
   try {
-    const agent = new BskyAgent({ service: "https://bsky.social" });
-    await agent.resumeSession({
-      did: session.did,
-      handle: session.handle,
-      accessJwt: session.accessJwt,
-      refreshJwt: session.refreshJwt,
-      active: true,
-    });
-    _agent = agent;
+    const data = (await xrpc("com.atproto.server.refreshSession", {
+      auth: session.refreshJwt,
+    })) as Record<string, unknown>;
 
     const updated: ShelfSession = {
-      did: agent.session!.did,
-      handle: agent.session!.handle,
-      accessJwt: agent.session!.accessJwt,
-      refreshJwt: agent.session!.refreshJwt,
+      did: String(data.did),
+      handle: String(data.handle),
+      accessJwt: String(data.accessJwt),
+      refreshJwt: String(data.refreshJwt),
     };
     saveSession(updated);
     return updated;
@@ -91,5 +119,4 @@ export function saveSession(session: ShelfSession) {
 
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
-  _agent = null;
 }
