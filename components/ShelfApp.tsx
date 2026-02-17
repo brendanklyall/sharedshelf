@@ -1,16 +1,38 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import CollectionCard from "./CollectionCard";
 import ItemCard from "./ItemCard";
 import AddItemModal from "./AddItemModal";
 import NewCollectionModal from "./NewCollectionModal";
+import SignInModal from "./SignInModal";
 import LexiconViewer from "./LexiconViewer";
 import CrossAppPanel from "./CrossAppPanel";
 import { SAMPLE_COLLECTIONS } from "@/lib/sample-data";
+import {
+  loadSession,
+  resumeSession,
+  clearSession,
+  type ShelfSession,
+} from "@/lib/auth";
+import {
+  fetchCollections,
+  putCollection,
+  deleteCollectionFromPDS,
+  putItem,
+  deleteItemFromPDS,
+} from "@/lib/pds";
 import type { ShelfCollection, ShelfItem, ViewMode } from "@/lib/types";
 
 export default function ShelfApp() {
+  // ─── Auth state ──────────────────────────────────────────────
+  const [session, setSession] = useState<ShelfSession | null>(null);
+  const [authLoading, setAuthLoading] = useState(true); // resolving session on mount
+  const [showSignIn, setShowSignIn] = useState(false);
+  const [pdsLoading, setPdsLoading] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  // ─── Shelf state ─────────────────────────────────────────────
   const [collections, setCollections] = useState<ShelfCollection[]>(SAMPLE_COLLECTIONS);
   const [activeColId, setActiveColId] = useState<string>(SAMPLE_COLLECTIONS[0]?.id);
   const [showAddItem, setShowAddItem] = useState(false);
@@ -19,8 +41,60 @@ export default function ShelfApp() {
   const [view, setView] = useState<ViewMode>("shelf");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // ─── On mount: try to resume session ─────────────────────────
+  useEffect(() => {
+    (async () => {
+      const stored = loadSession();
+      if (stored) {
+        const resumed = await resumeSession(stored);
+        if (resumed) {
+          setSession(resumed);
+          await loadFromPDS(resumed.did);
+        }
+      }
+      setAuthLoading(false);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ─── Load collections from PDS ───────────────────────────────
+  async function loadFromPDS(did: string) {
+    setPdsLoading(true);
+    setSyncError(null);
+    try {
+      const cols = await fetchCollections(did);
+      setCollections(cols.length > 0 ? cols : []);
+      setActiveColId(cols[0]?.id ?? "");
+    } catch (err) {
+      setSyncError("Couldn't load from your PDS. Showing demo data.");
+      setCollections(SAMPLE_COLLECTIONS);
+      setActiveColId(SAMPLE_COLLECTIONS[0]?.id);
+      console.error(err);
+    } finally {
+      setPdsLoading(false);
+    }
+  }
+
+  // ─── Sign in ─────────────────────────────────────────────────
+  const handleSignIn = async (newSession: ShelfSession) => {
+    setSession(newSession);
+    setShowSignIn(false);
+    await loadFromPDS(newSession.did);
+  };
+
+  // ─── Sign out ────────────────────────────────────────────────
+  const handleSignOut = () => {
+    clearSession();
+    setSession(null);
+    setCollections(SAMPLE_COLLECTIONS);
+    setActiveColId(SAMPLE_COLLECTIONS[0]?.id);
+    setSyncError(null);
+  };
+
+  // ─── Derived state ───────────────────────────────────────────
   const active = collections.find((c) => c.id === activeColId);
   const totalItems = collections.reduce((s, c) => s + (c.items?.length || 0), 0);
+  const isLive = !!session;
 
   const filteredItems =
     active?.items?.filter((item) => {
@@ -33,15 +107,41 @@ export default function ShelfApp() {
       );
     }) || [];
 
-  const addItem = (item: ShelfItem) => {
+  // ─── CRUD — add item ─────────────────────────────────────────
+  const addItem = async (item: ShelfItem) => {
+    // Optimistic local update
+    const tempItem = { ...item };
     setCollections((prev) =>
       prev.map((c) =>
-        c.id === activeColId ? { ...c, items: [...(c.items || []), item] } : c
+        c.id === activeColId ? { ...c, items: [...(c.items || []), tempItem] } : c
       )
     );
+
+    // Write to PDS if live
+    if (session && activeColId) {
+      try {
+        const rkey = await putItem(session.did, activeColId, item);
+        // Update the local id to match the PDS rkey
+        setCollections((prev) =>
+          prev.map((c) =>
+            c.id === activeColId
+              ? {
+                  ...c,
+                  items: c.items.map((i) =>
+                    i.id === tempItem.id ? { ...i, id: rkey } : i
+                  ),
+                }
+              : c
+          )
+        );
+      } catch {
+        setSyncError("Item saved locally but failed to sync to your PDS.");
+      }
+    }
   };
 
-  const deleteItem = (itemId: string) => {
+  // ─── CRUD — delete item ──────────────────────────────────────
+  const deleteItem = async (itemId: string) => {
     setCollections((prev) =>
       prev.map((c) =>
         c.id === activeColId
@@ -49,25 +149,66 @@ export default function ShelfApp() {
           : c
       )
     );
+
+    if (session) {
+      try {
+        await deleteItemFromPDS(session.did, itemId);
+      } catch {
+        setSyncError("Item removed locally but failed to delete from your PDS.");
+      }
+    }
   };
 
-  const addCollection = (col: ShelfCollection) => {
-    setCollections((prev) => [...prev, col]);
-    setActiveColId(col.id);
+  // ─── CRUD — add collection ───────────────────────────────────
+  const addCollection = async (col: ShelfCollection) => {
+    const tempCol = { ...col };
+    setCollections((prev) => [...prev, tempCol]);
+    setActiveColId(tempCol.id);
     setShowNewCol(false);
+
+    if (session) {
+      try {
+        const rkey = await putCollection(session.did, col);
+        // Update local id to PDS rkey
+        setCollections((prev) =>
+          prev.map((c) =>
+            c.id === tempCol.id ? { ...c, id: rkey } : c
+          )
+        );
+        setActiveColId(rkey);
+      } catch {
+        setSyncError("Collection saved locally but failed to sync to your PDS.");
+      }
+    }
   };
 
-  const deleteCollection = (colId: string) => {
+  // ─── CRUD — delete collection ────────────────────────────────
+  const deleteCollection = async (colId: string) => {
+    const col = collections.find((c) => c.id === colId);
     setCollections((prev) => {
       const filtered = prev.filter((c) => c.id !== colId);
-      // If deleting the active collection, switch to another
       if (activeColId === colId && filtered.length > 0) {
         setActiveColId(filtered[0].id);
+      } else if (filtered.length === 0) {
+        setActiveColId("");
       }
       return filtered;
     });
+
+    if (session && col) {
+      try {
+        await deleteCollectionFromPDS(
+          session.did,
+          colId,
+          col.items.map((i) => i.id)
+        );
+      } catch {
+        setSyncError("Collection removed locally but failed to delete from your PDS.");
+      }
+    }
   };
 
+  // ─── Render ──────────────────────────────────────────────────
   return (
     <div
       className="min-h-screen"
@@ -84,38 +225,60 @@ export default function ShelfApp() {
       >
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Mobile sidebar toggle */}
             <button
-              className="sm:hidden w-8 h-8 flex items-center justify-center rounded-lg mr-1"
+              className="sm:hidden w-8 h-8 flex items-center justify-center rounded-lg"
               style={{ background: "#f5f5f4", color: "#737373" }}
               onClick={() => setSidebarOpen(!sidebarOpen)}
               aria-label="Toggle sidebar"
             >
               ☰
             </button>
-            <a href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+            <a
+              href="/"
+              className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            >
               <span className="text-xl">📚</span>
               <span
                 className="font-semibold tracking-tight"
-                style={{ fontFamily: "var(--serif)", fontSize: 18, color: "#1a1a1a" }}
+                style={{
+                  fontFamily: "var(--serif)",
+                  fontSize: 18,
+                  color: "#1a1a1a",
+                }}
               >
                 Shared Shelf
               </span>
             </a>
-            <span
-              className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
-              style={{
-                background: "#dbeafe",
-                color: "#2563eb",
-                fontFamily: "var(--mono)",
-                fontSize: 10,
-              }}
-            >
-              Built on AT Protocol
-            </span>
+
+            {/* Mode badge */}
+            {authLoading ? null : isLive ? (
+              <span
+                className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
+                style={{
+                  background: "#dcfce7",
+                  color: "#16a34a",
+                  fontFamily: "var(--mono)",
+                  fontSize: 10,
+                }}
+              >
+                ● Live · AT Protocol
+              </span>
+            ) : (
+              <span
+                className="hidden sm:inline px-2 py-0.5 rounded-full text-xs"
+                style={{
+                  background: "#dbeafe",
+                  color: "#2563eb",
+                  fontFamily: "var(--mono)",
+                  fontSize: 10,
+                }}
+              >
+                Demo Mode
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
             {/* View toggle */}
             <div
               className="flex gap-0.5 p-0.5 rounded-lg"
@@ -144,8 +307,57 @@ export default function ShelfApp() {
             >
               {collections.length} collections · {totalItems} items
             </div>
+
+            {/* Auth button */}
+            {!authLoading &&
+              (isLive ? (
+                <div className="flex items-center gap-2">
+                  <span
+                    className="hidden sm:block text-xs font-medium"
+                    style={{ color: "#525252", fontFamily: "var(--mono)" }}
+                  >
+                    @{session.handle}
+                  </span>
+                  <button
+                    onClick={handleSignOut}
+                    className="px-3 py-1.5 rounded-xl text-xs font-medium transition-all hover:shadow-sm"
+                    style={{
+                      background: "#f5f5f4",
+                      color: "#737373",
+                      border: "1px solid #e5e5e5",
+                    }}
+                  >
+                    Sign out
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowSignIn(true)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-medium transition-all hover:shadow-md"
+                  style={{ background: "#0560ff", color: "#fff" }}
+                >
+                  🦋 Sign in
+                </button>
+              ))}
           </div>
         </div>
+
+        {/* Sync error banner */}
+        {syncError && (
+          <div
+            className="px-4 py-2 flex items-center justify-between text-xs"
+            style={{ background: "#fef2f2", borderTop: "1px solid #fecaca" }}
+          >
+            <span style={{ color: "#dc2626" }}>⚠ {syncError}</span>
+            <button
+              onClick={() => setSyncError(null)}
+              className="ml-3 text-xs"
+              style={{ color: "#dc2626" }}
+            >
+              ×
+            </button>
+          </div>
+        )}
       </header>
 
       <div
@@ -154,7 +366,6 @@ export default function ShelfApp() {
       >
         {/* ─── Sidebar ─── */}
         <>
-          {/* Mobile overlay */}
           {sidebarOpen && (
             <div
               className="fixed inset-0 z-30 sm:hidden"
@@ -178,9 +389,11 @@ export default function ShelfApp() {
             }}
           >
             <div className="p-4 space-y-1 flex-1">
-              {/* New collection button */}
               <button
-                onClick={() => { setShowNewCol(true); setSidebarOpen(false); }}
+                onClick={() => {
+                  setShowNewCol(true);
+                  setSidebarOpen(false);
+                }}
                 className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all hover:shadow-sm mb-2"
                 style={{
                   background: "#fff",
@@ -191,58 +404,102 @@ export default function ShelfApp() {
                 <span className="text-base">+</span> New collection
               </button>
 
-              {/* Collection list */}
-              <div className="space-y-0.5">
-                {collections.map((col) => (
-                  <CollectionCard
-                    key={col.id}
-                    collection={col}
-                    isActive={activeColId === col.id}
-                    onClick={() => {
-                      setActiveColId(col.id);
-                      setSearchTerm("");
-                      setSidebarOpen(false);
-                    }}
-                    onDelete={deleteCollection}
-                  />
-                ))}
+              {/* Loading state */}
+              {pdsLoading && (
+                <div
+                  className="text-center py-8 text-xs"
+                  style={{ color: "#a3a3a3" }}
+                >
+                  <div className="inline-block w-4 h-4 border-2 border-stone-200 border-t-stone-400 rounded-full animate-spin mb-2" />
+                  <p>Loading from your PDS…</p>
+                </div>
+              )}
 
-                {collections.length === 0 && (
-                  <div
-                    className="text-center py-8 text-xs"
-                    style={{ color: "#a3a3a3" }}
-                  >
-                    No collections yet.
-                    <br />
-                    Create your first one above.
-                  </div>
-                )}
-              </div>
+              {!pdsLoading && (
+                <div className="space-y-0.5">
+                  {collections.map((col) => (
+                    <CollectionCard
+                      key={col.id}
+                      collection={col}
+                      isActive={activeColId === col.id}
+                      onClick={() => {
+                        setActiveColId(col.id);
+                        setSearchTerm("");
+                        setSidebarOpen(false);
+                      }}
+                      onDelete={deleteCollection}
+                    />
+                  ))}
+
+                  {collections.length === 0 && !pdsLoading && (
+                    <div
+                      className="text-center py-8 text-xs leading-relaxed"
+                      style={{ color: "#a3a3a3" }}
+                    >
+                      {isLive
+                        ? "No collections yet on your PDS.\nCreate your first one above."
+                        : "No collections yet.\nCreate your first one above."}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Data ownership card */}
             <div className="p-4 pt-0">
-              <div
-                className="px-3 py-2.5 rounded-xl"
-                style={{
-                  background: "#fffbeb",
-                  border: "1px solid #fef3c7",
-                }}
-              >
+              {isLive ? (
                 <div
-                  className="text-xs font-medium mb-1"
-                  style={{ color: "#92400e" }}
+                  className="px-3 py-2.5 rounded-xl"
+                  style={{
+                    background: "#f0fdf4",
+                    border: "1px solid #bbf7d0",
+                  }}
                 >
-                  🏠 Your data, your repo
+                  <div
+                    className="text-xs font-medium mb-1"
+                    style={{ color: "#15803d" }}
+                  >
+                    ✓ Live AT Protocol
+                  </div>
+                  <div
+                    className="text-xs leading-relaxed"
+                    style={{ color: "#16a34a", fontFamily: "var(--mono)", fontSize: 10 }}
+                  >
+                    at://{session?.handle}/
+                    <br />
+                    social.sharedshelf.*
+                  </div>
                 </div>
+              ) : (
                 <div
-                  className="text-xs leading-relaxed"
-                  style={{ color: "#a16207" }}
+                  className="px-3 py-2.5 rounded-xl"
+                  style={{
+                    background: "#fffbeb",
+                    border: "1px solid #fef3c7",
+                  }}
                 >
-                  Collections are stored as Lexicon records in your AT Protocol
-                  data repository — not in our database.
+                  <div
+                    className="text-xs font-medium mb-1"
+                    style={{ color: "#92400e" }}
+                  >
+                    🏠 Your data, your repo
+                  </div>
+                  <div
+                    className="text-xs leading-relaxed"
+                    style={{ color: "#a16207" }}
+                  >
+                    Sign in with Bluesky to save collections to your AT Protocol
+                    PDS.
+                  </div>
+                  <button
+                    onClick={() => setShowSignIn(true)}
+                    className="mt-2 w-full py-1.5 rounded-lg text-xs font-medium transition-all"
+                    style={{ background: "#0560ff", color: "#fff" }}
+                  >
+                    🦋 Sign in with Bluesky
+                  </button>
                 </div>
-              </div>
+              )}
             </div>
           </aside>
         </>
@@ -252,7 +509,16 @@ export default function ShelfApp() {
           {/* ── Shelf view ── */}
           {view === "shelf" && (
             <>
-              {active ? (
+              {pdsLoading ? (
+                <div className="flex items-center justify-center py-32">
+                  <div className="text-center">
+                    <div className="inline-block w-8 h-8 border-2 border-stone-200 border-t-stone-500 rounded-full animate-spin mb-4" />
+                    <p className="text-sm" style={{ color: "#a3a3a3" }}>
+                      Loading your shelf from AT Protocol PDS…
+                    </p>
+                  </div>
+                </div>
+              ) : active ? (
                 <div className="fade-in">
                   {/* Collection header */}
                   <div className="flex items-start justify-between gap-4 mb-6">
@@ -307,6 +573,20 @@ export default function ShelfApp() {
                         >
                           social.sharedshelf.collection
                         </span>
+                        {isLive && (
+                          <span
+                            className="hidden sm:inline px-1.5 py-0.5 rounded text-xs"
+                            style={{
+                              background: "#dcfce7",
+                              color: "#16a34a",
+                              fontFamily: "var(--mono)",
+                              fontSize: 9,
+                              border: "1px solid #bbf7d0",
+                            }}
+                          >
+                            at://{session?.handle}/…/{active.id}
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -335,7 +615,7 @@ export default function ShelfApp() {
                     </div>
                   )}
 
-                  {/* Items list */}
+                  {/* Items */}
                   <div className="space-y-2">
                     {filteredItems.map((item, i) => (
                       <div
@@ -362,12 +642,14 @@ export default function ShelfApp() {
                         >
                           This shelf is empty
                         </p>
-                        <p className="text-sm" style={{ color: "#a3a3a3" }}>
-                          Add your first item to get started
+                        <p className="text-sm mb-4" style={{ color: "#a3a3a3" }}>
+                          {isLive
+                            ? "Add your first item — it'll be written to your PDS."
+                            : "Add your first item to get started."}
                         </p>
                         <button
                           onClick={() => setShowAddItem(true)}
-                          className="mt-4 px-4 py-2 rounded-xl text-sm font-medium transition-all hover:shadow-md"
+                          className="mt-1 px-4 py-2 rounded-xl text-sm font-medium transition-all hover:shadow-md"
                           style={{ background: active.color, color: "#fff" }}
                         >
                           + Add item
@@ -392,10 +674,12 @@ export default function ShelfApp() {
                     className="text-sm font-medium mb-1"
                     style={{ color: "#525252", fontFamily: "var(--serif)" }}
                   >
-                    No collection selected
+                    {isLive ? "Your shelf is empty" : "No collection selected"}
                   </p>
                   <p className="text-sm mb-4" style={{ color: "#a3a3a3" }}>
-                    Create your first collection to get started
+                    {isLive
+                      ? "Create your first collection — it'll be saved to your AT Protocol PDS."
+                      : "Create your first collection to get started."}
                   </p>
                   <button
                     onClick={() => setShowNewCol(true)}
@@ -428,6 +712,20 @@ export default function ShelfApp() {
                   different from conventional app architecture. Every feature
                   maps to a protocol primitive.
                 </p>
+                {isLive && (
+                  <div
+                    className="mt-3 px-3 py-2 rounded-xl text-xs"
+                    style={{
+                      background: "#f0fdf4",
+                      border: "1px solid #bbf7d0",
+                      color: "#15803d",
+                      fontFamily: "var(--mono)",
+                    }}
+                  >
+                    ✓ Signed in as @{session?.handle} · records writing to{" "}
+                    at://{session?.did}/social.sharedshelf.*
+                  </div>
+                )}
               </div>
 
               <LexiconViewer />
@@ -436,20 +734,14 @@ export default function ShelfApp() {
               {/* Why this matters */}
               <div
                 className="rounded-xl p-5"
-                style={{
-                  background: "#fefce8",
-                  border: "1px solid #fef9c3",
-                }}
+                style={{ background: "#fefce8", border: "1px solid #fef9c3" }}
               >
                 <div className="flex items-start gap-3">
                   <span className="text-xl flex-shrink-0">💡</span>
                   <div>
                     <h4
                       className="font-medium text-sm mb-2"
-                      style={{
-                        color: "#854d0e",
-                        fontFamily: "var(--serif)",
-                      }}
+                      style={{ color: "#854d0e", fontFamily: "var(--serif)" }}
                     >
                       Why this app matters for the Atmosphere
                     </h4>
@@ -489,17 +781,13 @@ export default function ShelfApp() {
                       <p>
                         <strong>Cross-app AT URIs prove interoperability is real.</strong>{" "}
                         A Shared Shelf item can reference a Bluesky post, a
-                        WhiteWind blog entry, a Frontpage link, or a Smoke
-                        Signal event — all using the same AT URI scheme. Your
-                        collections become a personal index of the entire
-                        Atmosphere.
+                        WhiteWind blog entry, a Frontpage link, or a Smoke Signal
+                        event — all using the same AT URI scheme.
                       </p>
                       <p>
                         <strong>User-owned data proves the portability promise.</strong>{" "}
                         If you move your PDS tomorrow, every collection and item
-                        moves with you. If Shared Shelf shuts down, another app
-                        reading the same Lexicon can pick up right where you
-                        left off. Your data is never trapped.
+                        moves with you. Your data is never trapped.
                       </p>
                     </div>
                   </div>
@@ -542,34 +830,15 @@ export default function ShelfApp() {
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     {[
-                      {
-                        icon: "👥",
-                        title: "Shared collections",
-                        desc: "Invite friends via their DID. They add items from their own repos.",
-                      },
-                      {
-                        icon: "🔔",
-                        title: "Activity feeds",
-                        desc: "See when friends add items — powered by a custom feed generator.",
-                      },
-                      {
-                        icon: "🔍",
-                        title: "Discovery",
-                        desc: "Browse public shelves from anyone on the network.",
-                      },
-                      {
-                        icon: "🏷️",
-                        title: "Community Lexicons",
-                        desc: "Use shared schemas for books, recipes, locations.",
-                      },
+                      { icon: "👥", title: "Shared collections", desc: "Invite friends via their DID. They add items from their own repos." },
+                      { icon: "🔔", title: "Activity feeds", desc: "See when friends add items — powered by a custom feed generator." },
+                      { icon: "🔍", title: "Discovery", desc: "Browse public shelves from anyone on the network." },
+                      { icon: "🏷️", title: "Community Lexicons", desc: "Use shared schemas for books, recipes, locations." },
                     ].map((f) => (
                       <div
                         key={f.title}
                         className="p-3 rounded-xl"
-                        style={{
-                          background: "#faf5ff",
-                          border: "1px solid #f3e8ff",
-                        }}
+                        style={{ background: "#faf5ff", border: "1px solid #f3e8ff" }}
                       >
                         <div className="text-xl mb-1">{f.icon}</div>
                         <div
@@ -606,6 +875,12 @@ export default function ShelfApp() {
         <NewCollectionModal
           onAdd={addCollection}
           onClose={() => setShowNewCol(false)}
+        />
+      )}
+      {showSignIn && (
+        <SignInModal
+          onSignIn={handleSignIn}
+          onClose={() => setShowSignIn(false)}
         />
       )}
     </div>

@@ -58,7 +58,15 @@ export default function AboutPage() {
             style={{ color: "#525252" }}
           >
             Shared Shelf was created by{" "}
-            <span style={{ color: "#1a1a1a", fontWeight: 500 }}>Brendan Lyall</span>{" "}
+            <a
+              href="https://bsky.app/profile/blyall.bsky.social"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium hover:underline"
+              style={{ color: "#0560ff" }}
+            >
+              Brendan Lyall
+            </a>{" "}
             as a personal tool for staying organized and keeping track of the
             topics, ideas, and discoveries worth remembering. Whether it&apos;s a
             book that shifted a perspective, a restaurant worth revisiting, an
