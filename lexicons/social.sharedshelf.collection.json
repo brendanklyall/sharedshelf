@@ -1,0 +1,30 @@
+{
+  "lexicon": 1,
+  "id": "social.sharedshelf.collection",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "description": "A curated collection of items",
+      "record": {
+        "type": "object",
+        "required": ["name", "createdAt"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 100 },
+          "description": { "type": "string", "maxLength": 500 },
+          "icon": { "type": "string", "maxLength": 4 },
+          "visibility": {
+            "type": "string",
+            "knownValues": ["public", "mutuals", "private"],
+            "default": "public"
+          },
+          "collaborators": {
+            "type": "array",
+            "items": { "type": "string", "format": "did" }
+          },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}

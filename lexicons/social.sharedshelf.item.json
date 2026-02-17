@@ -1,0 +1,37 @@
+{
+  "lexicon": 1,
+  "id": "social.sharedshelf.item",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "description": "An item in a collection — can reference any AT URI",
+      "record": {
+        "type": "object",
+        "required": ["collection", "title", "createdAt"],
+        "properties": {
+          "collection": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "AT URI of the parent collection"
+          },
+          "title": { "type": "string", "maxLength": 200 },
+          "note": { "type": "string", "maxLength": 2000 },
+          "url": { "type": "string", "format": "uri" },
+          "ref": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "AT URI referencing content from any Atmosphere app"
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 50 },
+            "maxLength": 10
+          },
+          "rating": { "type": "integer", "minimum": 1, "maximum": 5 },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}
