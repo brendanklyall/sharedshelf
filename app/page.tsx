@@ -35,13 +35,22 @@ export default function Home() {
             Built on AT Protocol
           </span>
         </div>
-        <Link
-          href="/shelf"
-          className="px-4 py-2 rounded-xl text-sm font-medium transition-all hover:shadow-md"
-          style={{ background: "#1a1a1a", color: "#fff" }}
-        >
-          Open Shelf →
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/about"
+            className="text-sm transition-colors"
+            style={{ color: "#737373" }}
+          >
+            About
+          </Link>
+          <Link
+            href="/shelf"
+            className="px-4 py-2 rounded-xl text-sm font-medium transition-all hover:shadow-md"
+            style={{ background: "#1a1a1a", color: "#fff" }}
+          >
+            Open Shelf →
+          </Link>
+        </div>
       </header>
 
       {/* Hero */}
