@@ -27,14 +27,10 @@ export default function SignInModal({ onSignIn, onClose }: SignInModalProps) {
       const session = await login(identifier, password);
       onSignIn(session);
     } catch (err) {
+      console.error("Sign in error:", err);
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.toLowerCase().includes("invalid")) {
-        setError("Handle or app password is incorrect. Double-check and try again.");
-      } else if (msg.toLowerCase().includes("network") || msg.toLowerCase().includes("fetch")) {
-        setError("Network error — check your connection and try again.");
-      } else {
-        setError("Sign in failed. Make sure you're using an App Password, not your account password.");
-      }
+      // Show the raw error from Bluesky so we can diagnose exactly what failed
+      setError(`Sign in failed: ${msg}`);
     } finally {
       setLoading(false);
     }
