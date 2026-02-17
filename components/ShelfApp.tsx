@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import CollectionCard from "./CollectionCard";
 import ItemCard from "./ItemCard";
 import AddItemModal from "./AddItemModal";
@@ -25,10 +26,15 @@ import {
 import type { ShelfCollection, ShelfItem, ViewMode } from "@/lib/types";
 
 export default function ShelfApp() {
+  const searchParams = useSearchParams();
+
   // ─── Auth state ──────────────────────────────────────────────
   const [session, setSession] = useState<ShelfSession | null>(null);
-  const [authLoading, setAuthLoading] = useState(false); // only true while actively resuming a stored session
-  const [showSignIn, setShowSignIn] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  // Auto-open sign-in modal if ?signin=1 in URL (from landing page CTA)
+  const [showSignIn, setShowSignIn] = useState(
+    searchParams.get("signin") === "1"
+  );
   const [pdsLoading, setPdsLoading] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
 

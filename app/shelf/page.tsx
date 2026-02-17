@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import ShelfApp from "@/components/ShelfApp";
 
 export const metadata = {
@@ -6,5 +7,9 @@ export const metadata = {
 };
 
 export default function ShelfPage() {
-  return <ShelfApp />;
+  return (
+    <Suspense>
+      <ShelfApp />
+    </Suspense>
+  );
 }

@@ -65,7 +65,7 @@ export default function Home() {
               fontFamily: "var(--mono)",
             }}
           >
-            <span>●</span> Demo Mode · All data lives in React state
+            <span>●</span> Built on AT Protocol · Sign in with Bluesky
           </div>
 
           <h1
@@ -87,21 +87,29 @@ export default function Home() {
             database.
           </p>
 
-          <Link
-            href="/shelf"
-            className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-base font-medium transition-all hover:shadow-lg hover:-translate-y-0.5"
-            style={{
-              background: "#1a1a1a",
-              color: "#fff",
-              transform: "translateY(0)",
-              transition: "all 0.2s ease",
-            }}
-          >
-            Try the Demo <span>→</span>
-          </Link>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <Link
+              href="/shelf?signin=1"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-base font-medium transition-all hover:shadow-lg"
+              style={{ background: "#0560ff", color: "#fff" }}
+            >
+              🦋 Sign in with Bluesky
+            </Link>
+            <Link
+              href="/shelf"
+              className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-base font-medium transition-all hover:shadow-md"
+              style={{
+                background: "#fff",
+                color: "#1a1a1a",
+                border: "1.5px solid #e5e5e5",
+              }}
+            >
+              Try Demo →
+            </Link>
+          </div>
 
           <p className="mt-4 text-xs" style={{ color: "#a3a3a3" }}>
-            No login required · Pre-loaded with sample collections
+            Sign in to save to your AT Protocol PDS · No login needed for demo
           </p>
         </div>
 
