@@ -27,7 +27,7 @@ import type { ShelfCollection, ShelfItem, ViewMode } from "@/lib/types";
 export default function ShelfApp() {
   // ─── Auth state ──────────────────────────────────────────────
   const [session, setSession] = useState<ShelfSession | null>(null);
-  const [authLoading, setAuthLoading] = useState(true); // resolving session on mount
+  const [authLoading, setAuthLoading] = useState(false); // only true while actively resuming a stored session
   const [showSignIn, setShowSignIn] = useState(false);
   const [pdsLoading, setPdsLoading] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -43,17 +43,24 @@ export default function ShelfApp() {
 
   // ─── On mount: try to resume session ─────────────────────────
   useEffect(() => {
-    (async () => {
-      const stored = loadSession();
-      if (stored) {
-        const resumed = await resumeSession(stored);
+    const stored = loadSession();
+    if (!stored) return; // no session → button already visible, nothing to do
+
+    setAuthLoading(true);
+    resumeSession(stored)
+      .then(async (resumed) => {
         if (resumed) {
           setSession(resumed);
           await loadFromPDS(resumed.did);
         }
-      }
-      setAuthLoading(false);
-    })();
+      })
+      .catch(() => {
+        // Silently clear a bad session
+        clearSession();
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
